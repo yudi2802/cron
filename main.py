@@ -14,6 +14,10 @@ import aiohttp
 import asyncio
 from flask import Flask
 from threading import Thread
+from datetime import timedelta
+
+# ID admin utama (gantikan dengan ID Telegram admin utama Anda)
+MAIN_ADMIN_ID = 6754416676  # Ganti dengan ID Telegram Anda
 
 app = Flask('')
 
@@ -35,31 +39,34 @@ load_dotenv()
 ALLOWED_USER_IDS_FILE = 'allowed_users.json'
 ADMIN_USER_IDS_FILE = 'admin.json'
 
-# Load allowed user IDs from the file
 def load_allowed_user_ids():
     if os.path.exists(ALLOWED_USER_IDS_FILE):
         with open(ALLOWED_USER_IDS_FILE, 'r') as file:
-            return json.load(file)
+            data = json.load(file)
+            # Jika data lama berupa list ID saja, tambahkan nilai default untuk expiry
+            if isinstance(data, list) and all(isinstance(item, int) for item in data):
+                return [{"id": item, "expiry": "N/A"} for item in data]
+            return data
     return []
 
-# Save allowed user IDs to the file
+def load_admin_user_ids():
+    if os.path.exists(ADMIN_USER_IDS_FILE):
+        with open(ADMIN_USER_IDS_FILE, 'r') as file:
+            data = json.load(file)
+            # Jika data lama berupa list ID saja, tambahkan nilai default untuk expiry
+            if isinstance(data, list) and all(isinstance(item, int) for item in data):
+                return [{"id": item, "expiry": "N/A"} for item in data]
+            return data
+
 def save_allowed_user_ids(user_ids):
     with open(ALLOWED_USER_IDS_FILE, 'w') as file:
         json.dump(user_ids, file)
 
-# Load admin user IDs from the file
-def load_admin_user_ids():
-    if os.path.exists(ADMIN_USER_IDS_FILE):
-        with open(ADMIN_USER_IDS_FILE, 'r') as file:
-            return json.load(file)
-    return []
-
-# Save admin user IDs to the file
 def save_admin_user_ids(admin_ids):
     with open(ADMIN_USER_IDS_FILE, 'w') as file:
         json.dump(admin_ids, file)
-
 # Utils class to handle utility functions
+
 class Utils:
     @staticmethod
     def guidv4(data=None):
@@ -212,7 +219,6 @@ class Viu:
     async def close(self):
         await self.session.close()
 
-# EmailGenerator class to generate random emails
 class EmailGenerator:
     def __init__(self):
         self.password = ""
@@ -236,141 +242,72 @@ class EmailGenerator:
 class TelegramBot:
     def __init__(self, token):
         self.application = Application.builder().token(token).build()
-        self.allowed_user_ids = load_allowed_user_ids()  # Load the list of allowed user IDs
-        self.admin_user_ids = load_admin_user_ids()  # Load the list of admin user IDs
-        self.partner = os.getenv("PARTNER_ID")  # Read the partner ID from .env file
+        self.allowed_user_ids = load_allowed_user_ids()  # Load daftar member
+        self.admin_user_ids = load_admin_user_ids()  # Load daftar admin
+        self.partner = os.getenv("PARTNER_ID")  # Partner ID dari file .env
         self._setup_handlers()
 
     def _setup_handlers(self):
-        self.application.add_handler(CommandHandler("viu", self.viu_command))
-        self.application.add_handler(CommandHandler("add", self.add_command))
         self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("admin", self.admin_command))
-        self.application.add_handler(CommandHandler("delete", self.delete_command))
-        self.application.add_handler(CommandHandler("mitra", self.mitra_command))  # Add /mitra command handler
-
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.message.from_user.id
-
-        if user_id in self.admin_user_ids:
-            status = "Admin"
-        elif user_id in self.allowed_user_ids:
-            status = "Member"
-        else:
-            status = "Tidak berlangganan"
-
-        await update.message.reply_text(
-            f"📌ID Telegram Anda: {user_id}\n🤡 Status: {status}"
-        )
-
-    async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if update.message.from_user.id not in self.admin_user_ids:
-                await update.message.reply_text("Maaf, Anda bukan admin 🙏")
-                return
-
-            if len(context.args) != 2:
-                await update.message.reply_text("🤡 Gunakan: /delete <admin atau allowed> <ID Telegram>")
-                return
-
-            list_type = context.args[0].lower()
-            user_id_to_remove = context.args[1]
-
-            try:
-                user_id_to_remove = int(user_id_to_remove)
-            except ValueError:
-                await update.message.reply_text("‼️ID pengguna yang diberikan tidak valid.")
-                return
-
-            if list_type == "admin":
-                if user_id_to_remove not in self.admin_user_ids:
-                    await update.message.reply_text(f"⁉️User {user_id_to_remove} bukan admin.")
-                    return
-
-                self.admin_user_ids.remove(user_id_to_remove)
-                save_admin_user_ids(self.admin_user_ids)
-                await update.message.reply_text(f"👌User {user_id_to_remove} telah dihapus dari daftar admin.")
-
-            elif list_type == "allowed":
-                if user_id_to_remove not in self.allowed_user_ids:
-                    await update.message.reply_text(f"⁉️User {user_id_to_remove} tidak ada dalam daftar allowed.")
-                    return
-
-                self.allowed_user_ids.remove(user_id_to_remove)
-                save_allowed_user_ids(self.allowed_user_ids)
-                await update.message.reply_text(f"👌User {user_id_to_remove} telah dihapus dari daftar allowed.")
-            else:
-                await update.message.reply_text("‼️Tipe tidak valid. Gunakan 'admin' atau 'allowed'.")
-
-        except Exception as e:
-            await update.message.reply_text(f"⁉️Terjadi kesalahan: {str(e)}")
-
-    async def add_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if update.message.from_user.id not in self.admin_user_ids:
-                await update.message.reply_text("🙏 Maaf, Anda belum berlangganan.")
-                return
-
-            if len(context.args) != 1:
-                await update.message.reply_text("🤡 Gunakan: /add <ID Telegram>")
-                return
-
-            new_user_id = context.args[0]
-
-            try:
-                new_user_id = int(new_user_id)
-            except ValueError:
-                await update.message.reply_text("😭ID pengguna yang diberikan tidak valid.")
-                return
-
-            if new_user_id in self.allowed_user_ids:
-                await update.message.reply_text("😸ID pengguna ini sudah ada dalam daftar allowed.")
-                return
-
-            self.allowed_user_ids.append(new_user_id)
-            save_allowed_user_ids(self.allowed_user_ids)
-            await update.message.reply_text(f"🤩User {new_user_id} telah ditambahkan ke daftar allowed.")
-        except Exception as e:
-            await update.message.reply_text(f"⁉️Terjadi kesalahan: {str(e)}")
-
-    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if update.message.from_user.id not in self.admin_user_ids:
-                await update.message.reply_text("⚠️ Anda bukan admin!")
-                return
-
-            if len(context.args) != 1:
-                await update.message.reply_text("🤡 Gunakan: /admin <ID Telegram>")
-                return
-
-            new_admin_id = context.args[0]
-
-            try:
-                new_admin_id = int(new_admin_id)
-            except ValueError:
-                await update.message.reply_text("😭ID pengguna yang diberikan tidak valid.")
-                return
-
-            if new_admin_id in self.admin_user_ids:
-                await update.message.reply_text("😊ID pengguna ini sudah menjadi admin.")
-                return
-
-            self.admin_user_ids.append(new_admin_id)
-            save_admin_user_ids(self.admin_user_ids)
-            await update.message.reply_text(f"😁User {new_admin_id} telah ditambahkan sebagai admin.")
-        except Exception as e:
-            await update.message.reply_text(f"⁉️Terjadi kesalahan: {str(e)}")
+        self.application.add_handler(CommandHandler("viu", self.restricted_handler(self.viu_command, ["member", "admin"])))
+        self.application.add_handler(CommandHandler("mitra", self.restricted_handler(self.mitra_command, ["member", "admin"])))
+        self.application.add_handler(CommandHandler("add", self.restricted_handler(self.add_command, ["admin"])))
+        self.application.add_handler(CommandHandler("admin", self.restricted_handler(self.admin_command, ["admin"])))
+        self.application.add_handler(CommandHandler("delete", self.restricted_handler(self.delete_command, ["admin"])))
+        self.application.add_handler(CommandHandler("check", self.restricted_handler(self.check_command, ["admin"])))
 
     async def check_permission(self, update: Update):
-        if update.message.from_user.id not in self.admin_user_ids:
-            await update.message.reply_text("🚫 Akses ditolak! Hubungi penyedia untuk info lebih lanjut.")
-            return False
-        return True
+        """Periksa tipe akses pengguna: admin utama, admin, member, atau tidak memiliki izin."""
+        user_id = update.message.from_user.id
+        if user_id == MAIN_ADMIN_ID:
+            return "main_admin"
+        if any(admin["id"] == user_id for admin in self.admin_user_ids):
+            return "admin"
+        if any(user["id"] == user_id for user in self.allowed_user_ids):
+            return "member"
+        return "none"
 
+    def restricted_handler(self, command_handler, allowed_roles):
+        """
+        Wrapper untuk membatasi akses ke perintah berdasarkan role (main_admin, admin, member).
+        :param command_handler: Fungsi handler perintah.
+        :param allowed_roles: Daftar role yang diizinkan untuk mengakses perintah.
+        """
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            user_role = await self.check_permission(update)
+            if user_role not in allowed_roles and user_role != "main_admin":
+                await update.message.reply_text("⚠️ Anda tidak memiliki akses untuk menggunakan perintah ini.")
+                return
+            await command_handler(update, context)
+        return wrapper
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk perintah /start."""
+        user_id = update.message.from_user.id
+        current_time = datetime.now().strftime("%Y-%m-%d | %H:%M:%S")
+
+        if user_id == MAIN_ADMIN_ID:
+            status = "Admin Utama"
+            expiry_date = "Tidak terbatas"
+        elif any(admin["id"] == user_id for admin in self.admin_user_ids):
+            status = "Admin"
+            expiry_date = next(admin["expiry"] for admin in self.admin_user_ids if admin["id"] == user_id)
+        elif any(user["id"] == user_id for user in self.allowed_user_ids):
+            status = "Member"
+            expiry_date = next(user["expiry"] for user in self.allowed_user_ids if user["id"] == user_id)
+        else:
+            status = "Tidak berlangganan"
+            expiry_date = "N/A"
+
+        await update.message.reply_text(
+            f"📌 ID Telegram Anda: {user_id}\n"
+            f"🤡 Status: {status}\n"
+            f"⏳ Masa aktif hingga: {expiry_date}\n"
+            f"⏰ Waktu Saat ini: {current_time}"
+        )
+        
     async def viu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self.check_permission(update):
-            return
-
+        """Handler untuk perintah /viu."""
         try:
             message = update.message.text.split()
             if len(message) != 4:
@@ -383,77 +320,141 @@ class TelegramBot:
                 await update.message.reply_text("😢Jumlah akun harus lebih dari 0.")
                 return
 
-            # Tambahkan batas maksimum jumlah akun
             if jumlah_akun > 50:
                 await update.message.reply_text("📌 Max input untuk sekali run adalah 50 akun.")
                 return
 
-            # Send "Processing..." message right after receiving the command
             processing_message = await update.message.reply_text("Sedang diproses⌚")
 
-            # Generate accounts and save to a file asynchronously
             file_path = await self.create_accounts(domain, password, self.partner, jumlah_akun)
 
-            # Send the file to the user
             with open(file_path, "rb") as file:
                 await update.message.reply_document(document=file, filename=file_path)
 
-            # Send success message after the file has been sent
             await update.message.reply_text("⭐ Berhasil membuat akun Viu Premium!")
-
-            # Clean up the temporary file after sending
             os.remove(file_path)
-
-            # Delete the "Processing..." message after completing the task
             await processing_message.delete()
 
         except Exception as e:
             await update.message.reply_text(f"‼️Terjadi kesalahan: {str(e)}")
 
     async def mitra_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.message.from_user.id
-
-        if user_id not in self.allowed_user_ids and user_id not in self.admin_user_ids:
-            await update.message.reply_text("⚠️ Anda tidak memiliki akses untuk menggunakan perintah ini.")
-            return
-
+        """Handler untuk perintah /mitra."""
         try:
-            message = update.message.text.split()
-            if len(message) != 5:
+            if len(context.args) != 4:
                 await update.message.reply_text("🤡 Gunakan: /mitra <@domain> <password> <partner> <jumlah>")
                 return
 
-            domain, password, partner, jumlah_akun = message[1], message[2], message[3], int(message[4])
+            domain, password, partner, jumlah_akun = context.args
 
-            if jumlah_akun <= 0:
-                await update.message.reply_text("😢 Jumlah akun harus lebih dari 0.")
+            jumlah_akun = int(jumlah_akun)
+            if jumlah_akun <= 0 or jumlah_akun > 50:
+                await update.message.reply_text("Jumlah akun harus antara 1 dan 50.")
                 return
 
-            if jumlah_akun > 50:
-                await update.message.reply_text("📌 Max input untuk sekali run adalah 50 akun.")
-                return
+            processing_message = await update.message.reply_text("⌚ Sedang diproses...")
 
-            # Send "Processing..." message
-            processing_message = await update.message.reply_text("Sedang diproses⌚")
-
-            # Generate accounts and save to a file asynchronously
             file_path = await self.create_accounts(domain, password, partner, jumlah_akun)
 
-            # Send the file to the user
             with open(file_path, "rb") as file:
                 await update.message.reply_document(document=file, filename=file_path)
 
-            # Send success message after the file has been sent
             await update.message.reply_text("⭐ Berhasil membuat akun Viu Premium!")
-
-            # Clean up the temporary file after sending
             os.remove(file_path)
-
-            # Delete the "Processing..." message
             await processing_message.delete()
 
         except Exception as e:
             await update.message.reply_text(f"‼️ Terjadi kesalahan: {str(e)}")
+
+    async def add_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk perintah /add."""
+        try:
+            if len(context.args) != 2:
+                await update.message.reply_text("🤡 Gunakan: /add <ID Telegram> <durasi>")
+                return
+
+            new_user_id, duration = int(context.args[0]), int(context.args[1])
+            expiry_date = (datetime.now() + timedelta(days=duration)).strftime("%Y-%m-%d | %H:%M:%S")
+
+            if any(user["id"] == new_user_id for user in self.allowed_user_ids):
+                await update.message.reply_text("😸 ID pengguna ini sudah ada dalam daftar member.")
+                return
+
+            self.allowed_user_ids.append({"id": new_user_id, "expiry": expiry_date})
+            save_allowed_user_ids(self.allowed_user_ids)
+            await update.message.reply_text(f"🤩 User {new_user_id} telah ditambahkan ke daftar member hingga {expiry_date}.")
+
+        except Exception as e:
+            await update.message.reply_text(f"⁉️ Terjadi kesalahan: {str(e)}")
+
+    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk perintah /admin."""
+        try:
+            if len(context.args) != 2:
+                await update.message.reply_text("🤡 Gunakan: /admin <ID Telegram> <durasi>")
+                return
+
+            new_admin_id, duration = int(context.args[0]), int(context.args[1])
+            expiry_date = (datetime.now() + timedelta(days=duration)).strftime("%Y-%m-%d | %H:%M:%S")
+
+            if any(admin["id"] == new_admin_id for admin in self.admin_user_ids):
+                await update.message.reply_text("😊 ID pengguna ini sudah menjadi admin.")
+                return
+
+            self.admin_user_ids.append({"id": new_admin_id, "expiry": expiry_date})
+            save_admin_user_ids(self.admin_user_ids)
+            await update.message.reply_text(f"😁 User {new_admin_id} telah ditambahkan sebagai admin hingga {expiry_date}.")
+
+        except Exception as e:
+            await update.message.reply_text(f"⁉️ Terjadi kesalahan: {str(e)}")
+
+    async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk perintah /delete."""
+        try:
+            if len(context.args) != 2:
+                await update.message.reply_text("🤡 Gunakan: /delete <admin atau member> <ID Telegram>")
+                return
+
+            list_type, user_id_to_remove = context.args[0].lower(), int(context.args[1])
+
+            if list_type == "admin":
+                if not any(admin["id"] == user_id_to_remove for admin in self.admin_user_ids):
+                    await update.message.reply_text(f"😢 User {user_id_to_remove} bukan admin.")
+                    return
+
+                self.admin_user_ids = [admin for admin in self.admin_user_ids if admin["id"] != user_id_to_remove]
+                save_admin_user_ids(self.admin_user_ids)
+                await update.message.reply_text(f"👌 User {user_id_to_remove} telah dihapus dari daftar admin.")
+
+            elif list_type == "member":
+                if not any(user["id"] == user_id_to_remove for user in self.allowed_user_ids):
+                    await update.message.reply_text(f"😢 User {user_id_to_remove} tidak ada dalam daftar member.")
+                    return
+
+                self.allowed_user_ids = [user for user in self.allowed_user_ids if user["id"] != user_id_to_remove]
+                save_allowed_user_ids(self.allowed_user_ids)
+                await update.message.reply_text(f"👌 User {user_id_to_remove} telah dihapus dari daftar member.")
+
+            else:
+                await update.message.reply_text("‼️ Gunakan 'admin' atau 'member' sebagai tipe.")
+
+        except Exception as e:
+            await update.message.reply_text(f"⁉️ Terjadi kesalahan: {str(e)}")
+
+    async def check_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk perintah /check."""
+        user_id = update.message.from_user.id
+        if user_id != MAIN_ADMIN_ID:
+            await update.message.reply_text("⚠️ Anda tidak memiliki akses untuk menggunakan perintah ini.")
+            return
+
+        admin_list = [f"{admin['id']} | {admin['expiry']}" for admin in self.admin_user_ids]
+        member_list = [f"{member['id']} | {member['expiry']}" for member in self.allowed_user_ids]
+
+        admin_text = "Admin\n" + "\n".join(admin_list) if admin_list else "Tidak ada admin."
+        member_text = "Member\n" + "\n".join(member_list) if member_list else "Tidak ada member."
+
+        await update.message.reply_text(f"{admin_text}\n\n{member_text}")
 
     async def create_accounts(self, domain, password, partner, jumlah_akun):
         viu = Viu()
@@ -475,7 +476,7 @@ class TelegramBot:
         for result in results:
             accounts_info += result
 
-        file_path = f"Viu_{jumlah_akun}Premium.txt"
+        file_path = f"Account{jumlah_akun}Premium.txt"
 
         # Save the accounts info to the file
         with open(file_path, "w") as file:
